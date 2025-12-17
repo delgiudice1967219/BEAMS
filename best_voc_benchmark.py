@@ -38,7 +38,7 @@ NUM_WORKERS = 0  # 0 obbligatorio su Windows per evitare crash
 
 # --- CLASSI PASCAL VOC ---
 VOC_CLASSES = [
-    # "background",
+    "background",
     "aeroplane",
     "bicycle",
     "bird",
@@ -73,31 +73,6 @@ def precompute_background_weights(clip_model, device):
     """Calcola i vettori dello sfondo una volta sola"""
     print("Pre-calcolo embeddings sfondo...")
 
-    # bg_classes = [
-    #     "ground",
-    #     "land",
-    #     "grass",
-    #     "tree",
-    #     "building",
-    #     "wall",
-    #     "sky",
-    #     "lake",
-    #     "water",
-    #     "river",
-    #     "sea",
-    #     "railway",
-    #     "railroad",
-    #     "road",
-    #     "rock",
-    #     "street",
-    #     "cloud",
-    #     "mountain",
-    #     "floor",
-    #     "ceiling",
-    #     "background",
-    #     "blur",
-    # ]
-
     bg_classes = [
         "ground",
         "land",
@@ -112,19 +87,44 @@ def precompute_background_weights(clip_model, device):
         "sea",
         "railway",
         "railroad",
-        "keyboard",
-        "helmet",
-        "cloud",
-        "house",
-        "mountain",
-        "ocean",
         "road",
         "rock",
         "street",
-        "valley",
-        "bridge",
-        "sign",
+        "cloud",
+        "mountain",
+        "floor",
+        "ceiling",
+        "background",
+        "blur",
     ]
+
+    # bg_classes = [
+    #     "ground",
+    #     "land",
+    #     "grass",
+    #     "tree",
+    #     "building",
+    #     "wall",
+    #     "sky",
+    #     "lake",
+    #     "water",
+    #     "river",
+    #     "sea",
+    #     "railway",
+    #     "railroad",
+    #     "keyboard",
+    #     "helmet",
+    #     "cloud",
+    #     "house",
+    #     "mountain",
+    #     "ocean",
+    #     "road",
+    #     "rock",
+    #     "street",
+    #     "valley",
+    #     "bridge",
+    #     "sign",
+    # ]
     bg_prompts = [f"a photo of {bg}" for bg in bg_classes]
 
     weights = []
