@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import torchvision.transforms as transforms
 import matplotlib.patches as mpatches
 
-# --- 1. CONFIGURAZIONE PATH E IMPORT ---
+# --- 1. CONFIGURAZIONE E IMPORT ---
 path_to_sam3 = (
     "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/sam3"
 )
@@ -19,10 +19,17 @@ if path_to_sam3 not in sys.path:
 sys.path.insert(0, "clip_es_official")
 sys.path.insert(0, "bcosification")
 
-# PERCORSI
+from bcos_localization import (
+    load_bcos_model,
+    load_clip_for_text,
+    tokenize_text_prompt,
+    compute_attributions,
+)
+import bcos.data.transforms as custom_transforms
+
 CHECKPOINT_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/sam3_model/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt"
-IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_004792.jpg"
-OUTPUT_DIR = "sam_action_viz"
+IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005070.jpg"
+OUTPUT_DIR = "sam_bcos_voc_refined"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -54,6 +61,159 @@ ACTION_COLORS = {
     "walking": (1.0, 0.75, 0.8),
 }
 
+# --- 2. PROMPT CONFIGURATION (IL CUORE DELLA SOLUZIONE) ---
+
+# Sfondo generico (sempre valido)
+BASE_BACKGROUND = [
+    "ground",
+    "land",
+    "grass",
+    "tree",
+    "building",
+    "wall",
+    "sky",
+    "lake",
+    "water",
+    "river",
+    "sea",
+    "railway",
+    "railroad",
+    "road",
+    "rock",
+    "street",
+    "cloud",
+    "mountain",
+    "floor",
+    "ceiling",
+    "background",
+    "blur",
+    "out of focus",
+    "scenery",
+    "empty space",
+]
+
+# Configurazione specifica per ogni azione
+# POSITIVE: Cosa cerchiamo
+# NEGATIVE: Cosa NON è l'azione (Distrattori specifici)
+PROMPT_CONFIG = {
+    "jumping": {
+        "positive": [
+            "jumping person",
+            "person mid-air",
+            "feet off the ground",
+            "leaping",
+        ],
+        "negative": [
+            "person standing",
+            "person walking",
+            "person sitting",
+            "feet on ground",
+        ],
+    },
+    "phoning": {
+        "positive": [
+            "person using a mobile phone",
+            "having a smartphone near ear",
+            # "talking on smartphone",
+        ],
+        "negative": [
+            "person touching face",
+            "hand near head",
+            "generic person",
+            "person listening",
+        ],
+    },
+    "playinginstrument": {
+        "positive": [
+            "playing a musical instrument",
+            "holding a guitar",
+            "playing flute",
+            "musician",
+        ],
+        "negative": ["holding a stick", "person holding object", "generic person"],
+    },
+    "reading": {
+        "positive": ["person reading a book", "reading a newspaper", "looking at text"],
+        "negative": ["person looking down", "sleeping person", "generic person"],
+    },
+    "ridingbike": {
+        "positive": ["riding a bicycle", "cyclist on bike", "pedaling"],
+        "negative": ["walking next to bike", "standing near bike", "person walking"],
+    },
+    "ridinghorse": {
+        "positive": ["riding a horse", "equestrian on horse"],
+        "negative": ["standing next to horse", "grooming horse", "generic person"],
+    },
+    "running": {
+        "positive": ["running person", "sprinting", "jogging", "fast motion"],
+        "negative": ["walking person", "standing person", "person waiting"],
+    },
+    "takingphoto": {
+        "positive": [
+            "taking a photo",
+            "holding camera to eye",
+            "photographer shooting",
+        ],
+        "negative": ["person looking", "holding object", "generic person"],
+    },
+    "usingcomputer": {
+        "positive": [
+            "typing on laptop",
+            "using computer keyboard",
+            "looking at monitor",
+        ],
+        "negative": ["sitting at desk", "watching tv", "generic person"],
+    },
+    "walking": {
+        "positive": ["walking person", "person going slowly", "person having a walk"],
+        "negative": ["running person", "sitting person"],
+    },
+}
+
+# --- 3. FUNZIONI DI EMBEDDING ---
+
+
+def get_action_embedding(clip_model, action, device):
+    prompts = PROMPT_CONFIG[action]["positive"]
+    # Aggiungi sempre il prompt base generico
+    prompts.append(f"a photo of a person {action}.")
+    prompts.append(f"a clean origami of a person {action}.")
+
+    weights = []
+    with torch.no_grad():
+        for p in prompts:
+            w = tokenize_text_prompt(clip_model, p).to(device)
+            weights.append(w)
+    return torch.mean(torch.stack(weights), dim=0)
+
+
+def get_negative_embedding(clip_model, action, device):
+    """
+    Combina lo sfondo base con i negativi specifici per l'azione.
+    Es: Se cerco 'running', il negativo include 'walking'.
+    Es: Se cerco 'phoning', il negativo include 'generic person'.
+    """
+    # 1. Inizia con lo sfondo base
+    final_negatives = BASE_BACKGROUND.copy()
+
+    # 2. Aggiungi i negativi specifici dell'azione
+    specific_negatives = PROMPT_CONFIG[action]["negative"]
+    final_negatives.extend(specific_negatives)
+
+    weights = []
+    with torch.no_grad():
+        for p in final_negatives:
+            # Usa "a photo of..." per i background objects
+            # Usa il testo diretto per le persone
+            if "person" in p or "walking" in p or "standing" in p:
+                text = p
+            else:
+                text = f"a photo of {p}"
+
+            w = tokenize_text_prompt(clip_model, text).to(device)
+            weights.append(w)
+    return torch.mean(torch.stack(weights), dim=0)
+
 
 def show_mask_custom(mask, ax, color, alpha=0.55):
     mask = np.squeeze(mask).astype(np.float32)
@@ -63,82 +223,54 @@ def show_mask_custom(mask, ax, color, alpha=0.55):
     ax.imshow(mask_image)
 
 
-def main():
-    print(f"--- STARTING PIPELINE ON {DEVICE} ---")
+# --- 4. PIPELINE ---
 
-    # =========================================================================
-    # FASE 1: SAM3 (SEGMENTAZIONE) - Rimane Invariata
-    # =========================================================================
+
+def main():
+    print(f"--- STARTING REFINED VOC PIPELINE ---")
+
+    # A. LOAD MODELS
     try:
         from sam3.model_builder import build_sam3_image_model
         from sam3.model.sam3_image_processor import Sam3Processor
     except ImportError as e:
-        print(f"Errore import SAM3: {e}")
+        print(f"Errore SAM3: {e}")
         return
 
-    print("Caricamento SAM3...")
-    sam_model = build_sam3_image_model(checkpoint_path=CHECKPOINT_PATH)
-    sam_model.to(DEVICE).eval()
+    sam_model = (
+        build_sam3_image_model(checkpoint_path=CHECKPOINT_PATH).to(DEVICE).eval()
+    )
     processor = Sam3Processor(sam_model)
 
-    raw_image = Image.open(IMG_PATH).convert("RGB")
-    original_w, original_h = raw_image.size
+    bcos_model, _ = load_bcos_model()
+    bcos_model.to(DEVICE).eval()
+    clip_model, _ = load_clip_for_text()
+    clip_model.to(DEVICE).eval()
+    print("✅ Models Loaded.")
 
-    print("Running SAM3 inference...")
+    raw_image = Image.open(IMG_PATH).convert("RGB")
+    W, H = raw_image.size
+
+    # B. SAM SEGMENTATION
+    print("Running SAM3...")
     inference_state = processor.set_image(raw_image)
     output = processor.set_text_prompt(state=inference_state, prompt="person")
-
     masks_tensor = output["masks"]
     scores_tensor = output["scores"]
 
-    valid_masks_for_bcos = []
-    SOGLIA = 0.05
-
+    valid_masks = []
     for i in range(len(scores_tensor)):
-        score = scores_tensor[i].item()
-        if score > SOGLIA:
-            m_numpy = masks_tensor[i].cpu().numpy()
-            m_numpy = np.squeeze(m_numpy)
-            if m_numpy.shape != (original_h, original_w):
-                m_numpy = cv2.resize(
-                    m_numpy.astype(np.uint8),
-                    (original_w, original_h),
-                    interpolation=cv2.INTER_NEAREST,
+        if scores_tensor[i].item() > 0.10:
+            m = masks_tensor[i].cpu().numpy().squeeze()
+            if m.shape != (H, W):
+                m = cv2.resize(
+                    m.astype(np.uint8), (W, H), interpolation=cv2.INTER_NEAREST
                 )
-            valid_masks_for_bcos.append(m_numpy > 0)
+            valid_masks.append(m > 0)
+    print(f"Found {len(valid_masks)} person masks.")
 
-    # Pulizia SAM
-    del sam_model
-    del processor
-    torch.cuda.empty_cache()
-
-    if not valid_masks_for_bcos:
-        print("Nessuna maschera trovata.")
-        return
-
-    # =========================================================================
-    # FASE 2: B-COS ACTION RECOGNITION (MULTICLASS - NO BACKGROUND)
-    # =========================================================================
-    print("\n--- [STEP 2] CLASSIFICAZIONE AZIONI (MULTICLASS SOFTMAX) ---")
-    from bcos_localization import (
-        load_bcos_model,
-        load_clip_for_text,
-        tokenize_text_prompt,
-        compute_attributions,
-    )
-    import bcos.data.transforms as custom_transforms
-
-    bcos_m, _ = load_bcos_model()
-    bcos_m.to(DEVICE).eval()
-    clip_m, _ = load_clip_for_text()
-    clip_m.to(DEVICE).eval()
-
-    def get_avg_emb(prompts):
-        with torch.no_grad():
-            weights = [tokenize_text_prompt(clip_m, p).to(DEVICE) for p in prompts]
-            return torch.mean(torch.stack(weights), dim=0)
-
-    # Nota: Abbiamo rimosso completamente bg_classes e bg_prompts
+    # C. B-COS DYNAMIC HEATMAPS
+    print("Generating Action-Specific Heatmaps...")
 
     prep = transforms.Compose(
         [
@@ -150,23 +282,16 @@ def main():
         ]
     )
     img_tensor = prep(raw_image)
-
     blur = transforms.GaussianBlur(kernel_size=5, sigma=1.0)
-    scales = [448, 560]  # Multi-scale
+    scales = [448, 560]
 
-    # Conterrà le mappe RAW (non normalizzate tra 0 e 1) per ogni azione
-    # Lista di tensori [H, W]
-    raw_action_logits = []
+    # Memorizziamo le mappe pulite
+    clean_heatmaps = {}
 
-    print("Generating Action Heatmaps...")
-
-    for action_idx, action in enumerate(VOC_ACTIONS):
-        target_prompts = [
-            f"a clean origami {action}.",
-            f"a photo of a {action}.",
-            f"the {action}.",
-        ]
-        t_w = get_avg_emb(target_prompts)
+    for action in VOC_ACTIONS:
+        # Calcoliamo embeddings specifici per QUESTA azione
+        pos_w = get_action_embedding(clip_model, action, DEVICE)
+        neg_w = get_negative_embedding(clip_model, action, DEVICE)
 
         accumulated_maps = []
 
@@ -174,105 +299,94 @@ def main():
             resize_t = transforms.Resize(
                 (s, s), interpolation=transforms.InterpolationMode.BICUBIC
             )
-            img_scaled = resize_t(img_tensor)
+            img_scaled = resize_t(img_tensor).to(DEVICE)
 
-            # 1. Forward Normale
-            inp = img_scaled.to(DEVICE)
             with torch.no_grad():
-                _, map_t, _, _ = compute_attributions(bcos_m, inp, t_w)
+                # B-Cos Raw Attribution
+                _, map_pos, _, _ = compute_attributions(bcos_model, img_scaled, pos_w)
+                _, map_neg, _, _ = compute_attributions(bcos_model, img_scaled, neg_w)
 
-                # Prendo solo la mappa target (niente mappa background)
-                map_t = torch.as_tensor(map_t).cpu().float()
-                while map_t.dim() > 2:
-                    map_t = map_t[0]
+                # Process
+                map_pos = torch.as_tensor(map_pos).cpu().float()
+                while map_pos.dim() > 2:
+                    map_pos = map_pos[0]
+                map_neg = torch.as_tensor(map_neg).cpu().float()
+                while map_neg.dim() > 2:
+                    map_neg = map_neg[0]
 
-                # Resize alla dimensione originale
-                map_t = F.interpolate(
-                    map_t[None, None],
-                    size=(original_h, original_w),
+                map_pos = blur(map_pos.unsqueeze(0)).squeeze()
+                map_neg = blur(map_neg.unsqueeze(0)).squeeze()
+
+                # Binary Logic: Action vs Specific Negatives
+                g_min = min(map_pos.min(), map_neg.min())
+                g_max = max(map_pos.max(), map_neg.max())
+                denom = g_max - g_min + 1e-8
+
+                norm_pos = (map_pos - g_min) / denom
+                norm_neg = (map_neg - g_min) / denom
+
+                # Softmax Binaria Aggressiva
+                probs = F.softmax(torch.stack([norm_neg, norm_pos]) * 30, dim=0)
+                prob_map_action = probs[1]
+
+                res = F.interpolate(
+                    prob_map_action[None, None],
+                    size=(H, W),
                     mode="bilinear",
                     align_corners=False,
                 ).squeeze()
-                accumulated_maps.append(map_t)
+                accumulated_maps.append(res)
 
-            # 2. Forward Flipped
-            inp_flip = torch.flip(img_scaled, [2]).to(DEVICE)
-            with torch.no_grad():
-                _, map_t_f, _, _ = compute_attributions(bcos_m, inp_flip, t_w)
+        clean_heatmaps[action] = torch.mean(
+            torch.stack(accumulated_maps), dim=0
+        ).numpy()
 
-                map_t_f = torch.as_tensor(map_t_f).cpu().float()
-                while map_t_f.dim() > 2:
-                    map_t_f = map_t_f[0]
-
-                # Unflip
-                map_t_f = torch.flip(map_t_f, [1])
-
-                map_t_f = F.interpolate(
-                    map_t_f[None, None],
-                    size=(original_h, original_w),
-                    mode="bilinear",
-                    align_corners=False,
-                ).squeeze()
-                accumulated_maps.append(map_t_f)
-
-        # Media su scale e flip per ottenere il punteggio grezzo di questa azione
-        # IMPORTANTE: Non normalizziamo min-max qui. Se un'azione è molto probabile,
-        # vogliamo che il suo valore assoluto sia alto rispetto alle altre.
-        avg_map = torch.mean(torch.stack(accumulated_maps), dim=0)
-
-        # Applichiamo un leggero blur per pulire il rumore
-        avg_map = blur(avg_map.unsqueeze(0)).squeeze()
-
-        raw_action_logits.append(avg_map)
-        print(f" -> Computed logits for: {action}")
-
-    # --- SOFTMAX COMPETITIVA ---
-    # Stackiamo tutto: [Num_Actions, H, W]
-    logits_tensor = torch.stack(raw_action_logits, dim=0)
-
-    # Moltiplichiamo per un fattore di temperatura (es. 10 o 20) per rendere la softmax più "decisa"
-    # Se i valori grezzi di B-Cos sono piccoli (es. 0.01), la softmax sarà piatta (tutto 10%).
-    # Se scaliamo, accentuiamo le differenze.
-    temperature_scale = 100.0
-
-    print(f"Applying Multiclass Softmax across {len(VOC_ACTIONS)} actions...")
-    # Softmax lungo la dimensione 0 (quella delle azioni)
-    # Risultato: Per ogni pixel (x,y), abbiamo una distribuzione di probabilità che somma a 1
-    action_probs_tensor = F.softmax(logits_tensor * temperature_scale, dim=0).numpy()
-
-    # Dizionario finale per la classificazione: { "running": mappa_prob_running, ... }
-    action_maps = {act: action_probs_tensor[i] for i, act in enumerate(VOC_ACTIONS)}
-
-    # --- CLASSIFICAZIONE MASCHERE ---
-    print("Classifying Persons...")
+    # D. VOTING (SAM MASKS)
+    print("Voting...")
     final_results = []
 
-    for idx, mask in enumerate(valid_masks_for_bcos):
+    for idx, mask in enumerate(valid_masks):
         best_act = "unknown"
         best_score = -1.0
 
-        # Ora cerchiamo quale azione ha la probabilità media più alta dentro la maschera
-        for action, hmap in action_maps.items():
-            # hmap contiene valori 0.0 - 1.0 (probabilità)
-            val = np.mean(hmap[mask])
+        # Dizionario di debug per vedere tutti i punteggi di una persona
+        debug_scores = {}
 
-            if val > best_score:
-                best_score = val
+        for action in VOC_ACTIONS:
+            heatmap = clean_heatmaps[action]
+            score = np.mean(heatmap[mask])
+            debug_scores[action] = score
+
+            if score > best_score:
+                best_score = score
                 best_act = action
 
-        final_results.append((mask, best_act, best_score))
-        print(f"  -> Mask {idx}: {best_act} (Conf: {best_score:.1%})")
+        # Stampa punteggi per debug
+        # print(f"Mask {idx} scores: {debug_scores}")
 
-    # --- VISUALIZZAZIONE FINALE ---
-    print("\n--- CREAZIONE IMMAGINE FINALE ---")
-    plt.figure(figsize=(10, 10))
+        # Soglia dinamica:
+        # 0.5 è il punto di equilibrio della softmax binaria.
+        # > 0.5 significa che è più 'Action' che 'Negative'.
+        if best_score > 0.55:
+            final_results.append((mask, best_act, best_score))
+            print(f"   Mask {idx}: {best_act} (Conf: {best_score:.1%})")
+        else:
+            print(
+                f"   Mask {idx}: Rejected (Max conf {best_score:.1%} too low - likely just generic person)"
+            )
+
+    # E. VISUALIZZAZIONE
+    print("Visualizing...")
+    plt.figure(figsize=(12, 12))
     plt.imshow(raw_image)
     ax = plt.gca()
 
-    used_actions = set()
+    final_results.sort(key=lambda x: x[2])
+    used_legends = set()
+
     for mask, action, score in final_results:
         color = ACTION_COLORS.get(action, (1.0, 1.0, 1.0))
-        used_actions.add(action)
+        used_legends.add(action)
         show_mask_custom(mask, ax, color)
 
         ys, xs = np.where(mask)
@@ -282,7 +396,7 @@ def main():
                 np.mean(ys),
                 f"{action}\n{score:.0%}",
                 color="white",
-                fontsize=9,
+                fontsize=8,
                 fontweight="bold",
                 ha="center",
                 va="center",
@@ -294,16 +408,16 @@ def main():
                 ),
             )
 
-    patches = [mpatches.Patch(color=ACTION_COLORS[a], label=a) for a in used_actions]
+    patches = [mpatches.Patch(color=ACTION_COLORS[a], label=a) for a in used_legends]
     if patches:
         plt.legend(handles=patches, loc="upper right")
 
     plt.axis("off")
-    plt.title("STEP 2: SAM3 + B-Cos (Multiclass Softmax - No BG)")
+    plt.title("SAM3 + B-Cos (Voc-Optimized Prompts)")
 
-    final_path = os.path.join(OUTPUT_DIR, "step2_softmax_nobg.png")
-    plt.savefig(final_path, bbox_inches="tight", pad_inches=0)
-    print(f"📸 Saved result to: {final_path}")
+    out_path = os.path.join(OUTPUT_DIR, "final_voc_result.png")
+    plt.savefig(out_path, bbox_inches="tight", pad_inches=0)
+    print(f"📸 Saved to: {out_path}")
     plt.show()
 
 

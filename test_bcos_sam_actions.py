@@ -243,16 +243,16 @@ def main():
     # --- GENERAZIONE HEATMAPS (CON FLIPPING) ---
     action_maps = {}
     blur = transforms.GaussianBlur(kernel_size=5, sigma=1.0)
-    scales = [448, 560]
+    scales = [448, 560, 672]
 
     print("Generating Action Heatmaps (Multi-scale + Flipping)...")
 
     for action in VOC_ACTIONS:
         # Prompt Target Arricchiti
         target_prompts = [
-            f"a clean origami {action}.",
-            f"a photo of a {action}.",
-            f"the {action}.",
+            f"a clean origami of a person {action}.",
+            f"a photo of a person {action}.",
+            f"a person {action}.",
         ]
         t_w = get_avg_emb(target_prompts)
 
