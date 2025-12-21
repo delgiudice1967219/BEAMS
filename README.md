@@ -30,10 +30,11 @@ The image is processed by **SAM3** to generate binary masks for all "person" ins
 ### 2.2. Explainable Feature Extraction (B-Cos)
 A **B-Cos ResNet50** model, pretrained with CLIP alignment, is used to generate dense contribution maps for the target action classes.
 -   **Embeddings**: Text embeddings for each action (e.g., "jumping", "phoning") and a global background class are pre-computed using the CLIP text encoder.
--   **Contribution Maps**: For a given image, the B-Cos network computes dynamic heatmaps indicating the contribution of each pixel to each action class embedding. These maps highlight regions that visually support the presence of the action.
--   **normalization**: Heatmaps are normalized and competed against each other (Softmax) to produce probability-like maps for each action.
+-   **Multi-Scale Inference**: Attribution maps are computed at multiple scales (e.g., 224, 448, 560, 672, 784) to capture details at various resolutions.
+-   **Gaussian Blur**: A Gaussian Blur is applied to the raw contribution maps to smooth artifacts.
+-   **Joint Normalization & Softmax**: The maps for the target class and background are typically normalized jointly (using global min/max) and then passed through a Softmax layer with a high temperature scaling (e.g., * 20) to produce sharp, probability-like heatmaps.
 
-### 2.3. Scoring and Classification
+### 2.3. Scoring and Classification (Action Detection)
 For each person mask identified by SAM3:
 1.  **Person Score ($S_{person}$)**: Use the B-Cos contribution map *inside* the person mask. High contribution values indicate strong visual evidence for the action on the person's body.
 2.  **Context Score ($S_{context}$)**: Use the contribution map in a dilated region *around* the person (Context Mask). This captures interaction with objects (e.g., "ridingbike" needs a bike).
@@ -41,10 +42,20 @@ For each person mask identified by SAM3:
     $$ Score = S_{person} + \lambda \cdot S_{context} $$
 4.  **Classification**: The action with the highest score is assigned to the person.
 
+### 2.4. Zero-Shot Segmentation Pipeline
+In addition to Action Detection, the repository includes a specific pipeline for **Zero-Shot Semantic Segmentation**, implemented in `visualize_voc.py`:
+
+This pipeline leverages the interpretable B-Cos maps to generate high-quality segmentation masks without direct supervision:
+1.  **Feature Computation**: Similar to above, multi-scale contribution maps are computed for a target class (e.g., "aeroplane") vs background.
+2.  **Heatmap Generation**: Joint normalization and Softmax competition produce a dense probability map.
+3.  **Hard Masking**: A threshold (e.g., 0.6) is applied to create a preliminary "Hard Mask".
+4.  **Refinement with DenseCRF**: A fully connected Conditional Random Field (DenseCRF) is applied as a post-processing step. It uses the image's RGB pixel values to respect object boundaries, significantly refining the coarse Hard Mask into a detailed segmentation mask.
+
 ## 3. Repository Structure
 
 -   `benchmark_bcos_voc_action.py`: **Main Benchmark Script**. Runs the full pipeline on Pascal VOC 2012 Action Validation set using B-Cos + SAM3.
 -   `benchmark_sam_voc_action.py`: Baseline script using only SAM3 for action detection (using prompts like "person riding a bike").
+-   `visualize_voc.py`: Visualization script demonstrating the Zero-Shot Segmentation pipeline with DenseCRF refinement.
 -   `bcos_utils.py`: Utility functions for loading B-Cos models, computing attributions, and processing text prompts.
 -   `bcosification/`: Submodule containing the core B-Cos library.
 -   `sam3/`: Directory for SAM3 model code and checkpoints.
@@ -64,12 +75,15 @@ For each person mask identified by SAM3:
     cd BCos_object_detection
     ```
 
-2.  Install dependencies:
+2.  **Install Dependencies**:
+    We provide a consolidated `requirements.txt` that includes dependencies for B-Cos, SAM3, and CLIP-ES.
     ```bash
-    pip install -r bcosification/requirements.txt
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+    pip install -r requirements.txt
     ```
-    *Note: Adjust CUDA version in the torch install command as needed.*
+    *Note: If you encounter issues with `pydensecrf`, you may need to install it manually or from source:*
+    ```bash
+    pip install git+https://github.com/lucasb-eyer/pydensecrf.git
+    ```
 
 3.  **SAM3 Setup**: Ensure the SAM3 model checkpoint (`sam3.pt`) is downloaded. The `main.ipynb` notebook contains cells to automate this download using `huggingface_hub`.
     ```bash
@@ -102,12 +116,13 @@ python benchmark_bcos_voc_action.py --limit 50 --checkpoint sam3_model/sam3.pt
 -   `--limit`: (Optional) Limit the number of images to process (useful for testing).
 -   `--checkpoint`: Path to the SAM3 model checkpoint.
 
-### Running the SAM Baseline
-To evaluate the SAM-only baseline:
+### Running Visualization (Segmentation Pipeline)
+To visualize the zero-shot segmentation capabilities with DenseCRF:
 
 ```bash
-python benchmark_sam_voc_action.py --limit 50 --checkpoint sam3_model/sam3.pt
+python visualize_voc.py
 ```
+This script will process random samples from the VOC dataset and save visualization plots (Original, Heatmap, Hard Mask, CRF Result) to the `segmentation_viz/` directory.
 
 ## 6. Results
 
