@@ -146,7 +146,6 @@ def compute_attributions(
 ):
     """
     Compute B-cos attributions.
-    EXACT COPY from original compute_attributions() function (lines 70-128).
     """
     device = torch.device(
         "cuda"

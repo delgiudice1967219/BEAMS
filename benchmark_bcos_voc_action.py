@@ -12,8 +12,7 @@ import sklearn.metrics
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# --- PATH SETUP ---
-# Add local paths to sys.path to import from existing modules
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(current_dir, "clip_es_official"))
 sys.path.insert(0, os.path.join(current_dir, "bcosification"))
@@ -26,7 +25,7 @@ sys.path.insert(0, os.path.join(current_dir, "sam3"))
 # but it has global variables that will execute.
 # Let's redefine necessary constants and functions to avoid side effects and dependency on hardcoded paths in the old script.
 
-from bcos_localization import (
+from bcos_utils import (
     load_bcos_model,
     load_clip_for_text,
     tokenize_text_prompt,

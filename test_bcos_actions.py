@@ -20,7 +20,7 @@ if path_to_sam3 not in sys.path:
 sys.path.insert(0, "clip_es_official")
 sys.path.insert(0, "bcosification")
 
-from bcos_localization import (
+from bcos_utils import (
     load_bcos_model,
     load_clip_for_text,
     tokenize_text_prompt,
@@ -53,7 +53,7 @@ IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detectio
 # IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005070.jpg"  # GALLERY -> running, walking
 
 
-OUTPUT_DIR = "sam_bcos_voc"
+OUTPUT_DIR = "sam_bcos_voc_viz"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"

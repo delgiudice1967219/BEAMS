@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 # --- SETUP IMPORT ---
 sys.path.insert(0, "clip_es_official")
 sys.path.insert(0, "bcosification")
-from bcos_localization import (
+from bcos_utils import (
     load_bcos_model,
     load_clip_for_text,
     tokenize_text_prompt,
