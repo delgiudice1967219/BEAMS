@@ -8,8 +8,9 @@ import cv2
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 import matplotlib.patches as mpatches
+from utils_voc_actions import parse_voc_xml, compute_iou, mask_to_bbox
 
-# --- 1. CONFIGURAZIONE E IMPORT ---
+
 path_to_sam3 = (
     "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/sam3"
 )
@@ -28,8 +29,31 @@ from bcos_localization import (
 import bcos.data.transforms as custom_transforms
 
 CHECKPOINT_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/sam3_model/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt"
-IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_003570.jpg"
-OUTPUT_DIR = "sam_bcos_voc_refined"
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005438.jpg"  # flauti
+IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005572.jpg"  # matrimonio
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005706.jpg"  # phoning reading
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_003817.jpg"  # violinista che legge
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006994.jpg"  # scooter e pedoni
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006767.jpg"  # mamma e figlia walking
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006375.jpg"  # cavallo in medio oriente
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005751.jpg"  # calciatrici
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006295.jpg"  # suonatore dentro al muro
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006089.jpg"  # bimba sul cavallo
+
+### GALLERY ###
+
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005220.jpg"  # GALLERY -> walking, bike
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_004775.jpg"  # GALLERY -> photo, instrument
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_003298.jpg"  # GALLERY -> jumping, forse ce esempio migliore
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_004512.jpg"  # GALLERY -> horse, walking
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005256.jpg"  # GALLERY -> reading, photo
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006129.jpg"  # GALLERY -> phoning
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006095.jpg"  # GALLERY -> usingcomputer
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_003422.jpg"  # GALLERY -> running, bike
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005070.jpg"  # GALLERY -> running, walking
+
+
+OUTPUT_DIR = "sam_bcos_voc"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -63,7 +87,6 @@ ACTION_COLORS = {
     "background": (0.3, 0.3, 0.3),
 }
 
-# --- 2. PROMPT CONFIGURATION ---
 
 BASE_BACKGROUND = [
     "ground",
@@ -196,6 +219,8 @@ PROMPT_CONFIG = {
             "sprinting with wide stride",
             "in jogging motion",
             "in athletic gear",
+            # "moving with feet distant from each other",
+            "with arms pumping",
         ],
         "negative": [
             "walking slowly",
@@ -241,10 +266,11 @@ PROMPT_CONFIG = {
     "walking": {
         "positive": [
             "walking normally",
-            "strolling on street",
-            "taking a step forward",
+            # "strolling on street",
+            # "taking a step forward",
             "walking slowly",
             "walking",
+            # "moving on with feet near each other",
         ],
         "negative": [
             "running fast",
@@ -252,6 +278,8 @@ PROMPT_CONFIG = {
             "standing perfectly still",
             "sitting on a bench",
             "riding a bike",
+            "jumping in the air",
+            "with arms pumping",
         ],
     },
 }
@@ -369,6 +397,28 @@ def dilate_person_mask(mask, radius_px=18):
     return dilated
 
 
+def compute_ctx_radius_from_mask(mask, k=0.06, r_min=10, r_max=55):
+    """
+    Radius proporzionale alla dimensione della persona (bbox diagonal).
+    k: percentuale della diagonale (0.05-0.08 tipico)
+    r_min/r_max: clamp in pixel per stabilità
+    """
+    ys, xs = np.where(mask)
+    if len(xs) == 0 or len(ys) == 0:
+        return r_min
+
+    x0, x1 = xs.min(), xs.max()
+    y0, y1 = ys.min(), ys.max()
+
+    w = (x1 - x0) + 1
+    h = (y1 - y0) + 1
+    diag = (w * w + h * h) ** 0.5
+
+    r = int(round(k * diag))
+    r = max(r_min, min(r, r_max))
+    return r
+
+
 def calculate_topk_score(heatmap, mask, top_k_percent=0.25):
     values = heatmap[mask]
     if len(values) == 0:
@@ -410,6 +460,10 @@ def score_action(
 
 
 # --- 4. MAIN PIPELINE ---
+CTX_K = 0.06  # 0.06  # 6% della diagonale bbox (prova 0.05-0.08)
+CTX_R_MIN = 10  # 10
+CTX_R_MAX = 55  # 55
+ALPHA_CTX = 0.7  # 0.7
 
 
 def main():
@@ -454,6 +508,51 @@ def main():
                 )
             valid_masks.append(m > 0)
     print(f"Found {len(valid_masks)} person masks.")
+
+    # --- FILTER MASKS: Match against Ground Truth People ---
+
+    # 1. Deduce XML path from the image path
+    # Assumes standard VOC folder structure (JPEGImages -> Annotations)
+    xml_path = IMG_PATH.replace("JPEGImages", "Annotations").replace(".jpg", ".xml")
+
+    gt_people = parse_voc_xml(xml_path)
+    print(f"Ground Truth contains {len(gt_people)} people.")
+
+    # Only filter if we actually found GT people
+    if len(gt_people) > 0:
+        gt_to_mask = {}
+        used_masks = set()
+        ious = np.zeros((len(gt_people), len(valid_masks)))
+
+        # Calculate IoU for all pairs
+        for i, gt in enumerate(gt_people):
+            for j, mask in enumerate(valid_masks):
+                bbox_mask = mask_to_bbox(mask)
+                if bbox_mask:
+                    ious[i, j] = compute_iou(gt["bbox"], bbox_mask)
+
+        # Greedy Matching
+        if ious.size > 0:
+            # Sort pairs by IoU (descending)
+            indices = np.dstack(
+                np.unravel_index(np.argsort(ious.ravel())[::-1], ious.shape)
+            )[0]
+
+            for r, c in indices:
+                if ious[r, c] < 0.5:  # IoU Threshold (same as benchmark)
+                    break
+                if r not in gt_to_mask and c not in used_masks:
+                    gt_to_mask[r] = c
+                    used_masks.add(c)
+
+        # Overwrite valid_masks to keep ONLY matched masks
+        matched_indices = sorted(gt_to_mask.values())
+        valid_masks = [valid_masks[i] for i in matched_indices]
+        print(f"Filtered down to {len(valid_masks)} masks that match GT.")
+    else:
+        print("No GT found for this image (or XML missing). Keeping all masks.")
+
+    # --- END FILTERING ---
 
     # C. B-COS DYNAMIC HEATMAPS (SOFTMAX UPDATE)
     print("Generating Mutual Exclusive Heatmaps...")
@@ -509,26 +608,26 @@ def main():
         prob_map_resized = cv2.resize(prob_map, (W, H), interpolation=cv2.INTER_LINEAR)
         clean_heatmaps[action] = prob_map_resized
 
-    # --- VISUALIZZAZIONE INTERMEDIA HEATMAPS (KEPT AS REQUESTED) ---
-    print("\n--- VISUALIZING INTERMEDIATE HEATMAPS (SOFTMAX PROBS) ---")
-    fig, axes = plt.subplots(2, 5, figsize=(20, 8))
-    fig.suptitle("B-Cos Heatmaps (Softmax Probabilities)", fontsize=16)
-    axes = axes.flatten()
+    # # --- VISUALIZZAZIONE INTERMEDIA HEATMAPS (KEPT AS REQUESTED) ---
+    # print("\n--- VISUALIZING INTERMEDIATE HEATMAPS (SOFTMAX PROBS) ---")
+    # fig, axes = plt.subplots(2, 5, figsize=(20, 8))
+    # fig.suptitle("B-Cos Heatmaps (Softmax Probabilities)", fontsize=16)
+    # axes = axes.flatten()
 
-    for idx, action in enumerate(VOC_ACTIONS):
-        ax = axes[idx]
-        heatmap = clean_heatmaps[action]
-        # Softmax output is 0..1, so we plot vmin=0, vmax=1
-        im = ax.imshow(heatmap, cmap="jet", vmin=0, vmax=1)
-        ax.set_title(action)
-        ax.axis("off")
+    # for idx, action in enumerate(VOC_ACTIONS):
+    #     ax = axes[idx]
+    #     heatmap = clean_heatmaps[action]
+    #     # Softmax output is 0..1, so we plot vmin=0, vmax=1
+    #     im = ax.imshow(heatmap, cmap="jet", vmin=0, vmax=1)
+    #     ax.set_title(action)
+    #     ax.axis("off")
 
-    cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
-    fig.colorbar(im, cax=cbar_ax)
+    # cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
+    # fig.colorbar(im, cax=cbar_ax)
 
-    heatmap_path = os.path.join(OUTPUT_DIR, "intermediate_heatmaps.png")
-    plt.savefig(heatmap_path, bbox_inches="tight")
-    print(f"📸 Saved intermediate heatmaps to: {heatmap_path}")
+    # heatmap_path = os.path.join(OUTPUT_DIR, "intermediate_heatmaps.png")
+    # plt.savefig(heatmap_path, bbox_inches="tight")
+    # print(f"📸 Saved intermediate heatmaps to: {heatmap_path}")
 
     # D. VOTING / SCORING (LOGIC PRESERVED)
     print("Voting using Coherent Action Score...")
@@ -537,32 +636,110 @@ def main():
     # Pre-compute stack for mean calculation
     all_maps = np.stack([clean_heatmaps[a] for a in VOC_ACTIONS], axis=0)
 
-    for idx, mask in enumerate(valid_masks):
-        best_act = "unknown"
-        best_score = -1e9
+    ### OLD with high scores e.g. 250%
+    # for idx, person_mask in enumerate(valid_masks):
+    #     best_act = "unknown"  ## TODO: METTERE UNKNOWN A GRIGIO
+    #     best_score = -1e9
+
+    #     # nuova mask: persona + contesto
+    #     ctx_r = compute_ctx_radius_from_mask(
+    #         person_mask, k=CTX_K, r_min=CTX_R_MIN, r_max=CTX_R_MAX
+    #     )
+    #     ctx_mask = dilate_person_mask(person_mask, radius_px=ctx_r)
+
+    #     min_score = 0.0
+    #     max_score = 0.0
+    #     for i, action in enumerate(VOC_ACTIONS):
+    #         diff_map = clean_heatmaps[action]
+    #         mean_other = np.mean(np.delete(all_maps, i, axis=0), axis=0)
+
+    #         # score sulla persona pura
+    #         s_person = score_action(
+    #             diff_map,
+    #             person_mask,
+    #             mean_other,
+    #             lambda_c=0.7,
+    #             beta_l=0.6,
+    #         )
+
+    #         # score su persona + oggetto vicino
+    #         s_context = score_action(
+    #             diff_map,
+    #             ctx_mask,
+    #             mean_other,
+    #             lambda_c=0.7,
+    #             beta_l=0.6,
+    #         )
+
+    #         # combinazione (non distruttiva)
+    #         score = s_person + ALPHA_CTX * s_context
+
+    #         if score < min_score:
+    #             min_score = score
+    #         if score > max_score:
+    #             max_score = score
+
+    #         if score > best_score:
+    #             best_score = score
+    #             best_act = action
+
+    #     best_score = (best_score - min_score) / (max_score - min_score + 1e-8)
+    #     if best_score > 0.1:  # 3.0
+    #         final_results.append((person_mask, best_act, best_score))
+    #         print(f"   Mask {idx}: {best_act} (Score: {best_score:.3f})")
+    #     else:
+    #         print(f"   Mask {idx}: Rejected (Score {best_score:.3f})")
+
+    ### NEW with normalized scores
+    CONFIDENCE_THRESHOLD = 0.1  # Adjust this threshold (0.0 to 1.0) to tune sensitivity
+
+    for idx, person_mask in enumerate(valid_masks):
+
+        # 1. Collect raw scores for ALL actions for this specific mask
+        raw_scores = []
+
+        # ... (keep your context radius calculation here) ...
+        ctx_r = compute_ctx_radius_from_mask(
+            person_mask, k=CTX_K, r_min=CTX_R_MIN, r_max=CTX_R_MAX
+        )
+        ctx_mask = dilate_person_mask(person_mask, radius_px=ctx_r)
 
         for i, action in enumerate(VOC_ACTIONS):
             diff_map = clean_heatmaps[action]
-            # Mean of other actions for selectivity score
+            # ... (keep mean_other calculation) ...
             mean_other = np.mean(np.delete(all_maps, i, axis=0), axis=0)
 
-            score = score_action(
-                diff_map,
-                mask,
-                mean_other,
-                lambda_c=0.7,
-                beta_l=0.6,
+            # ... (keep s_person and s_context calculations) ...
+            s_person = score_action(
+                diff_map, person_mask, mean_other, lambda_c=0.7, beta_l=0.6
+            )
+            s_context = score_action(
+                diff_map, ctx_mask, mean_other, lambda_c=0.7, beta_l=0.6
             )
 
-            if score > best_score:
-                best_score = score
-                best_act = action
+            # Raw score combination
+            raw_score = s_person + ALPHA_CTX * s_context
+            raw_scores.append(raw_score)
 
-        if best_score > 0.1:
-            final_results.append((mask, best_act, best_score))
-            print(f"   Mask {idx}: {best_act} (Score: {best_score:.3f})")
+        # 2. Normalize raw scores to Probabilities using Softmax
+        # Convert list to tensor for easy softmax
+        scores_tensor = torch.tensor(raw_scores, dtype=torch.float32)
+        probs = F.softmax(scores_tensor, dim=0).numpy()  # resulting values sum to 1.0
+
+        # 3. Determine Best Action or Assign Unknown
+        max_prob = np.max(probs)
+        best_idx = np.argmax(probs)
+
+        if max_prob < CONFIDENCE_THRESHOLD:
+            final_action = "unknown"
+            final_score = -1  # As done with SAM3
         else:
-            print(f"   Mask {idx}: Rejected (Score {best_score:.3f})")
+            final_action = VOC_ACTIONS[best_idx]
+            final_score = max_prob
+
+        # 4. Append to results (We now keep Unknowns instead of rejecting them)
+        print(f"   Mask {idx}: {final_action} (Conf: {final_score:.1%})")
+        final_results.append((person_mask, final_action, final_score))
 
     # E. VISUALIZZAZIONE FINALE (PRESERVED)
     print("Visualizing Final Result...")
@@ -574,7 +751,7 @@ def main():
     used_legends = set()
 
     for mask, action, score in final_results:
-        color = ACTION_COLORS.get(action, (1.0, 1.0, 1.0))
+        color = ACTION_COLORS.get(action, (0.5, 0.5, 0.5))
         used_legends.add(action)
         show_mask_custom(mask, ax, color)
 
@@ -583,7 +760,7 @@ def main():
             ax.text(
                 np.mean(xs),
                 np.mean(ys),
-                f"{action}\n{score:.0%}",
+                f"{action}\n{score:.0%}",  ## TODO: CAMBIARE SCORE IN PROBABILITA
                 color="white",
                 fontsize=8,
                 fontweight="bold",
@@ -602,7 +779,7 @@ def main():
         plt.legend(handles=patches, loc="upper right")
 
     plt.axis("off")
-    plt.title("SAM3 + B-Cos (Voc-Optimized + Softmax)")
+    plt.title("SAM3 + B-Cos Action Detection")
 
     out_path = os.path.join(OUTPUT_DIR, "final_voc_result.png")
     plt.savefig(out_path, bbox_inches="tight", pad_inches=0)

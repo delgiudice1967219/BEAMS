@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import torchvision.transforms as transforms
 import matplotlib.patches as mpatches
 
-# --- 1. CONFIGURAZIONE E IMPORT ---
+# --- 1. CONFIGURATION AND IMPORTS ---
 path_to_sam3 = (
     "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/sam3"
 )
@@ -28,12 +28,12 @@ from bcos_localization import (
 import bcos.data.transforms as custom_transforms
 
 CHECKPOINT_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/sam3_model/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt"
-IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_003570.jpg"
+IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_003960.jpg"
 OUTPUT_DIR = "sam_bcos_voc_refined"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-IMG_SIZE = 512
+IMG_SIZE = 512  # Resolution for the crops
 
 VOC_ACTIONS = [
     "jumping",
@@ -96,45 +96,48 @@ BASE_BACKGROUND = [
 PROMPT_CONFIG = {
     "jumping": {
         "positive": [
-            "jumping in the air",
-            "with feet completely off the ground",
-            "with knees bent in mid-air",
-            "leaping high",
-            "doing a jump",
+            "a photo of a person jumping in the air",
+            "feet completely off the ground",
+            "knees bent in mid-air",
+            "an athlete leaping high",
+            "a person doing a jump",
         ],
         "negative": [
-            "standing on the ground",
-            "with feet planted on the floor",
-            "walking",
-            "running on the ground",
+            "a person standing on the ground",
+            "feet planted on the floor",
+            "a person walking",
+            "a person running on the ground",
             "shadow on the ground",
         ],
     },
     "phoning": {
         "positive": [
-            "holding a smartphone to the ear",
-            "talking on a mobile phone",
-            "using a telephone",
-            "holding a phone against face",
-            "making a phone call",
-            "phoning",
+            "person holding a smartphone to the ear",
+            "person talking on a mobile phone",
+            "person using a telephone",
+            "person holding a phone against face",
+            "person making a phone call",
+            # "screen of a mobile phone",
+            "person phoning",
         ],
         "negative": [
+            # "touching face with hand",
             "scratching head",
             "resting hand on cheek",
             "drinking from a cup",
             "adjusting glasses",
             "looking down at the phone",
+            # "holding a camera",
         ],
     },
     "playinginstrument": {
         "positive": [
-            "playing a musical instrument",
-            "with fingers on guitar strings",
-            "blowing into a wind instrument",
-            "with hands on piano keys",
-            "performing with instrument",
-            "holding a violin",
+            "person playing a musical instrument",
+            "person with fingers on guitar strings",
+            "person blowing into a wind instrument",
+            "person with hands on piano keys",
+            "musician performing with instrument",
+            "person holding a violin",
         ],
         "negative": [
             "holding a weapon",
@@ -147,14 +150,14 @@ PROMPT_CONFIG = {
     },
     "reading": {
         "positive": [
-            "looking down at an open book",
-            "reading a newspaper",
+            "person looking down at an open book",
+            "person reading a newspaper",
             "eyes focused on text in a book",
-            "holding a magazine to read",
+            "person holding a magazine to read",
         ],
         "negative": [
             "sleeping with head down",
-            "looking at a mobile phone",
+            "looking at a mobile phone",  # Crucial distinction
             "looking at the ground",
             "writing on paper",
             "using a laptop",
@@ -165,20 +168,21 @@ PROMPT_CONFIG = {
             "straddling a bicycle seat",
             "sitting on a bike",
             "hands gripping bicycle handlebars",
+            # "feet on bicycle pedals",
             "cyclist riding a bike",
         ],
         "negative": [
             "walking next to a bicycle",
             "pushing a bike by the handlebars",
             "standing near a bike",
-            "riding a motorcycle",
+            "riding a motorcycle",  # Hard negative
             "repairing a bike",
         ],
     },
     "ridinghorse": {
         "positive": [
             "sitting on a horse",
-            "riding a horse",
+            "person riding a horse",
             "horseback riding posture",
             "legs straddling a horse",
         ],
@@ -192,10 +196,11 @@ PROMPT_CONFIG = {
     },
     "running": {
         "positive": [
-            "running",
+            "person running",
             "sprinting with wide stride",
-            "in jogging motion",
-            "in athletic gear",
+            "person in jogging motion",
+            "runner in athletic gear",
+            # "blurred motion of running",
         ],
         "negative": [
             "walking slowly",
@@ -223,11 +228,13 @@ PROMPT_CONFIG = {
     },
     "usingcomputer": {
         "positive": [
-            "typing on a laptop keyboard",
+            "person typing on a laptop keyboard",
+            # "staring at a computer monitor",
             "sitting at a desk using a computer",
-            "with hands on mouse and keyboard",
-            "looking at a computer screen",
-            "using a computer",
+            "person with hands on mouse and keyboard",
+            "person looking at a computer screen",
+            # "working in an office cubicle",
+            "person using a computer",
         ],
         "negative": [
             "watching television",
@@ -241,10 +248,10 @@ PROMPT_CONFIG = {
     "walking": {
         "positive": [
             "walking normally",
-            "strolling on street",
-            "taking a step forward",
+            "pedestrian strolling on street",
+            "person taking a step forward",
             "walking slowly",
-            "walking",
+            "person walking",
         ],
         "negative": [
             "running fast",
@@ -256,73 +263,64 @@ PROMPT_CONFIG = {
     },
 }
 
+# --- 3. HELPER FUNCTIONS ---
 
-# --- 3. FUNCTIONS ---
+
+def get_person_crop(image, mask, context_pct=0.4):
+    """
+    Extracts a crop of the person from the image based on the SAM mask.
+    Adds 'context_pct' padding to include surrounding objects (bikes, chairs, etc).
+    Returns: cropped_image (PIL), cropped_mask (numpy), bbox (x1,y1,x2,y2)
+    """
+    y_indices, x_indices = np.where(mask)
+    if len(y_indices) == 0:
+        return image, mask, (0, 0, image.width, image.height)
+
+    y_min, y_max = np.min(y_indices), np.max(y_indices)
+    x_min, x_max = np.min(x_indices), np.max(x_indices)
+
+    h_box = y_max - y_min
+    w_box = x_max - x_min
+
+    # Add Context Padding
+    pad_y = int(h_box * context_pct)
+    pad_x = int(w_box * context_pct)
+
+    y1 = max(0, y_min - pad_y)
+    y2 = min(image.height, y_max + pad_y)
+    x1 = max(0, x_min - pad_x)
+    x2 = min(image.width, x_max + pad_x)
+
+    img_crop = image.crop((x1, y1, x2, y2))
+    mask_crop = mask[y1:y2, x1:x2]
+
+    return img_crop, mask_crop, (x1, y1, x2, y2)
 
 
 def get_global_background_embedding(clip_model, device):
-    """Computes a single robust Background embedding vector for Softmax competition"""
     bg_prompts = [f"a photo of {bg}" for bg in BASE_BACKGROUND]
-    identity_template = ["{}"]
-
     weights = []
     with torch.no_grad():
         for p in bg_prompts:
-            w = tokenize_text_prompt(clip_model, p, templates=identity_template).to(
-                device
-            )
+            w = tokenize_text_prompt(clip_model, p, templates=["{}"]).to(device)
             weights.append(w)
     return torch.mean(torch.stack(weights), dim=0)
 
 
 def get_action_embedding(clip_model, action, device):
-    """Calcola il vettore del target"""
     prompts = list(PROMPT_CONFIG[action]["positive"])
-    prompts += [
-        f"a clean origami of a person with clothes,people,human {action}.",
-        f"a photo of a person with clothes,people,human {action}.",
-        f"a photo of the {action}.",
-        f"a picture of a person with clothes,people,human {action}.",
-        f"an image of a person with clothes,people,human {action}.",
-        f"an image of the {action}.",
-        f"the {action}.",
-    ]
-    identity_template = ["{}"]
+    prompts += [f"a photo of a person {action}.", f"the {action}."]
     weights = []
     with torch.no_grad():
         for p in prompts:
-            w = tokenize_text_prompt(clip_model, p, templates=identity_template).to(
-                device
-            )
-            weights.append(w)
-    return torch.mean(torch.stack(weights), dim=0)
-
-
-def get_negative_embedding(clip_model, action, device):
-    """
-    KEPT FOR LEGACY/SCORING if needed, though Softmax uses Global Background.
-    """
-    final_negatives = BASE_BACKGROUND.copy()
-    specific_negatives = PROMPT_CONFIG[action]["negative"]
-    final_negatives.extend(specific_negatives)
-    identity_template = ["{}"]
-    weights = []
-    with torch.no_grad():
-        for p in final_negatives:
-            if "person" in p or "walking" in p or "standing" in p:
-                text = p
-            else:
-                text = f"a photo of {p}"
-            w = tokenize_text_prompt(clip_model, text, templates=identity_template).to(
-                device
-            )
+            w = tokenize_text_prompt(clip_model, p, templates=["{}"]).to(device)
             weights.append(w)
     return torch.mean(torch.stack(weights), dim=0)
 
 
 def compute_raw_bcos_map(model, img_tensor, weight, blur_transform, device):
-    """Computes the raw B-Cos heatmap (averaged over scales)"""
-    scales = [224, 448, 560, 672, 784]
+    # Multi-scale for robustness on the crop
+    scales = [224, 336, 448, 512]
     accumulated_maps = []
 
     for s in scales:
@@ -333,7 +331,6 @@ def compute_raw_bcos_map(model, img_tensor, weight, blur_transform, device):
 
         with torch.no_grad():
             _, attribution, _, _ = compute_attributions(model, img_scaled, weight)
-
             if isinstance(attribution, np.ndarray):
                 attribution = torch.from_numpy(attribution).to(device)
             if attribution.dim() == 3:
@@ -341,7 +338,7 @@ def compute_raw_bcos_map(model, img_tensor, weight, blur_transform, device):
 
             attribution = blur_transform(attribution.unsqueeze(0)).squeeze()
 
-            # Resize back to IMG_SIZE
+            # Resize back to fixed IMG_SIZE (512)
             attr_resized = F.interpolate(
                 attribution.unsqueeze(0).unsqueeze(0),
                 size=(IMG_SIZE, IMG_SIZE),
@@ -361,49 +358,37 @@ def show_mask_custom(mask, ax, color, alpha=0.55):
     ax.imshow(mask_image)
 
 
-def dilate_person_mask(mask, radius_px=18):
-    mask_u8 = mask.astype(np.uint8) * 255
-    k = 2 * radius_px + 1
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-    dilated = cv2.dilate(mask_u8, kernel, iterations=1) > 0
-    return dilated
-
-
-def calculate_topk_score(heatmap, mask, top_k_percent=0.25):
-    values = heatmap[mask]
-    if len(values) == 0:
-        return 0.0
-    if len(values) < 10:
-        return np.mean(values)
-    k = int(len(values) * top_k_percent)
-    if k < 1:
-        k = 1
-    top_values = np.partition(values, -k)[-k:]
-    return np.mean(top_values)
-
-
 def score_action(
     diff_map, mask, mean_other_maps, top_q=(0.7, 0.95), lambda_c=0.7, beta_l=0.6
 ):
-    eps = 1e-6
+    """
+    Scores the action based on the heatmap logic.
+    Refined for crops: mask is the binary person mask inside the crop.
+    """
     vals = diff_map[mask]
-    if len(vals) < 20:
+    if len(vals) < 10:
         return -np.inf
 
+    # Support (How strong is the signal in the mask?)
     lo, hi = np.quantile(vals, top_q)
     support_vals = vals[(vals >= lo) & (vals <= hi)]
     S = np.mean(support_vals) if len(support_vals) > 0 else 0.0
 
+    # Contra-indication (Are there negative regions?)
     neg_vals = vals[vals < 0]
     C = -np.mean(neg_vals) if len(neg_vals) > 0 else 0.0
 
+    # Selectivity (Is it better than other actions?)
+    eps = 1e-6
     pos_map = np.maximum(diff_map, 0)
     baseline = np.maximum(mean_other_maps, 0)
-
     selective = pos_map / (baseline + eps)
     sel_vals = selective[mask]
-    sel_top = np.quantile(sel_vals, 0.8)
-    L = np.mean(sel_vals[sel_vals >= sel_top]) if len(sel_vals) > 0 else 0.0
+    if len(sel_vals) > 0:
+        sel_top = np.quantile(sel_vals, 0.8)
+        L = np.mean(sel_vals[sel_vals >= sel_top])
+    else:
+        L = 0.0
 
     score = S - lambda_c * C + beta_l * np.log1p(L)
     return score
@@ -413,7 +398,7 @@ def score_action(
 
 
 def main():
-    print(f"--- STARTING REFINED VOC PIPELINE (SOFTMAX LOGIC) ---")
+    print(f"--- STARTING INSTANCE-BASED REFINED PIPELINE ---")
 
     # A. LOAD MODELS
     try:
@@ -423,22 +408,24 @@ def main():
         print(f"Errore SAM3: {e}")
         return
 
+    print("Loading SAM3...")
     sam_model = (
         build_sam3_image_model(checkpoint_path=CHECKPOINT_PATH).to(DEVICE).eval()
     )
     processor = Sam3Processor(sam_model)
 
+    print("Loading B-Cos & CLIP...")
     bcos_model, _ = load_bcos_model()
     bcos_model.to(DEVICE).eval()
     clip_model, _ = load_clip_for_text()
     clip_model.to(DEVICE).eval()
     print("✅ Models Loaded.")
 
+    # B. SAM SEGMENTATION
     raw_image = Image.open(IMG_PATH).convert("RGB")
     W, H = raw_image.size
+    print(f"Processing Image: {W}x{H}")
 
-    # B. SAM SEGMENTATION
-    print("Running SAM3...")
     inference_state = processor.set_image(raw_image)
     output = processor.set_text_prompt(state=inference_state, prompt="person")
     masks_tensor = output["masks"]
@@ -446,19 +433,30 @@ def main():
 
     valid_masks = []
     for i in range(len(scores_tensor)):
-        if scores_tensor[i].item() > 0.10:
+        if (
+            scores_tensor[i].item() > 0.15
+        ):  # Slightly higher threshold for person detection
             m = masks_tensor[i].cpu().numpy().squeeze()
             if m.shape != (H, W):
                 m = cv2.resize(
                     m.astype(np.uint8), (W, H), interpolation=cv2.INTER_NEAREST
                 )
             valid_masks.append(m > 0)
-    print(f"Found {len(valid_masks)} person masks.")
 
-    # C. B-COS DYNAMIC HEATMAPS (SOFTMAX UPDATE)
-    print("Generating Mutual Exclusive Heatmaps...")
+    print(f"Found {len(valid_masks)} valid person masks.")
 
-    prep = transforms.Compose(
+    # C. PRE-COMPUTE EMBEDDINGS (Optimization)
+    print("Pre-computing CLIP embeddings...")
+    bg_weight = get_global_background_embedding(clip_model, DEVICE)
+    action_weights = {}
+    for action in VOC_ACTIONS:
+        action_weights[action] = get_action_embedding(clip_model, action, DEVICE)
+
+    # D. INSTANCE-LEVEL B-COS LOOP
+    final_results = []
+
+    # Transform for the Crops (Standard 512x512)
+    crop_prep = transforms.Compose(
         [
             transforms.Resize(
                 (IMG_SIZE, IMG_SIZE), interpolation=transforms.InterpolationMode.BICUBIC
@@ -467,125 +465,111 @@ def main():
             custom_transforms.AddInverse(),
         ]
     )
-    img_tensor = prep(raw_image)
-    blur = transforms.GaussianBlur(kernel_size=5, sigma=1.0)
-
-    clean_heatmaps = {}
-
-    # 1. Compute Global Background Weight & Map
-    print("Computing Global Background Map...")
-    bg_weight = get_global_background_embedding(clip_model, DEVICE)
-    bg_map_raw = compute_raw_bcos_map(bcos_model, img_tensor, bg_weight, blur, DEVICE)
-
-    # 2. Compute All Action Weights & Maps
-    action_maps_raw = []
-    print("Computing Action Maps...")
-    for action in VOC_ACTIONS:
-        w = get_action_embedding(clip_model, action, DEVICE)
-        m = compute_raw_bcos_map(bcos_model, img_tensor, w, blur, DEVICE)
-        action_maps_raw.append(m)
-
-    # 3. Stack [Background, Act1, Act2, ..., ActN]
-    all_maps_stack = torch.stack(
-        [bg_map_raw] + action_maps_raw, dim=0
-    )  # [11, 512, 512]
-
-    # 4. Joint Normalization
-    g_min = all_maps_stack.min()
-    g_max = all_maps_stack.max()
-    denom = g_max - g_min + 1e-8
-    stack_norm = (all_maps_stack - g_min) / denom
-
-    # 5. SOFTMAX (Mutual Exclusivity)
-    # High Temperature (20) to make it sharp
-    print("Applying Softmax...")
-    probs = F.softmax(stack_norm * 20, dim=0)  # [11, 512, 512]
-
-    # 6. Distribute Probs back to clean_heatmaps for scoring
-    # Index 0 is Background, so Action i is at Index i+1
-    for i, action in enumerate(VOC_ACTIONS):
-        prob_map = probs[i + 1].cpu().numpy()
-        # Resize to Original Image Size for Scoring
-        prob_map_resized = cv2.resize(prob_map, (W, H), interpolation=cv2.INTER_LINEAR)
-        clean_heatmaps[action] = prob_map_resized
-
-    # --- VISUALIZZAZIONE INTERMEDIA HEATMAPS (KEPT AS REQUESTED) ---
-    print("\n--- VISUALIZING INTERMEDIATE HEATMAPS (SOFTMAX PROBS) ---")
-    fig, axes = plt.subplots(2, 5, figsize=(20, 8))
-    fig.suptitle("B-Cos Heatmaps (Softmax Probabilities)", fontsize=16)
-    axes = axes.flatten()
-
-    for idx, action in enumerate(VOC_ACTIONS):
-        ax = axes[idx]
-        heatmap = clean_heatmaps[action]
-        # Softmax output is 0..1, so we plot vmin=0, vmax=1
-        im = ax.imshow(heatmap, cmap="jet", vmin=0, vmax=1)
-        ax.set_title(action)
-        ax.axis("off")
-
-    cbar_ax = fig.add_axes([0.92, 0.15, 0.02, 0.7])
-    fig.colorbar(im, cax=cbar_ax)
-
-    heatmap_path = os.path.join(OUTPUT_DIR, "intermediate_heatmaps.png")
-    plt.savefig(heatmap_path, bbox_inches="tight")
-    print(f"📸 Saved intermediate heatmaps to: {heatmap_path}")
-
-    # D. VOTING / SCORING (LOGIC PRESERVED)
-    print("Voting using Coherent Action Score...")
-    final_results = []
-
-    # Pre-compute stack for mean calculation
-    all_maps = np.stack([clean_heatmaps[a] for a in VOC_ACTIONS], axis=0)
+    blur_kernel = transforms.GaussianBlur(kernel_size=5, sigma=1.0)
 
     for idx, mask in enumerate(valid_masks):
+        print(f"\n--- Analyzing Person {idx + 1} ---")
+
+        # 1. CROP: Zoom in on this person + context
+        img_crop, mask_crop, bbox = get_person_crop(raw_image, mask, context_pct=0.4)
+
+        # Convert crop to tensor for model
+        crop_tensor = crop_prep(img_crop)
+
+        # Resize mask to IMG_SIZE (512) to match heatmap dimensions for scoring
+        mask_crop_resized = (
+            cv2.resize(
+                mask_crop.astype(np.uint8),
+                (IMG_SIZE, IMG_SIZE),
+                interpolation=cv2.INTER_NEAREST,
+            )
+            > 0
+        )
+
+        # 2. COMPUTE MAPS FOR CROP
+        # Compute Background Map
+        bg_map = compute_raw_bcos_map(
+            bcos_model, crop_tensor, bg_weight, blur_kernel, DEVICE
+        )
+
+        # Compute Action Maps
+        maps_list = [bg_map]  # Index 0
+        for action in VOC_ACTIONS:
+            w = action_weights[action]
+            m = compute_raw_bcos_map(bcos_model, crop_tensor, w, blur_kernel, DEVICE)
+            maps_list.append(m)
+
+        # 3. SOFTMAX COMPETITION (Local to this person)
+        stack = torch.stack(maps_list, dim=0)  # [11, 512, 512]
+
+        # Normalize
+        g_min = stack.min()
+        g_max = stack.max()
+        stack_norm = (stack - g_min) / (g_max - g_min + 1e-8)
+
+        # Apply Softmax (Temp=15 for sharpness)
+        probs = F.softmax(stack_norm * 15, dim=0).cpu().numpy()
+
+        # 4. SCORING
         best_act = "unknown"
         best_score = -1e9
 
+        # Iterate actions (Indices 1 to 10)
         for i, action in enumerate(VOC_ACTIONS):
-            diff_map = clean_heatmaps[action]
-            # Mean of other actions for selectivity score
-            mean_other = np.mean(np.delete(all_maps, i, axis=0), axis=0)
+            current_map = probs[i + 1]  # +1 because 0 is bg
+
+            # Mean of other action maps for selectivity
+            # Indices of other actions in 'probs' array
+            other_indices = [k + 1 for k in range(len(VOC_ACTIONS)) if k != i]
+            mean_other = np.mean(probs[other_indices], axis=0)
 
             score = score_action(
-                diff_map,
-                mask,
-                mean_other,
-                lambda_c=0.7,
-                beta_l=0.6,
+                current_map, mask_crop_resized, mean_other  # Use the crop mask!
             )
 
             if score > best_score:
                 best_score = score
                 best_act = action
 
-        if best_score > 0.1:
-            final_results.append((mask, best_act, best_score))
-            print(f"   Mask {idx}: {best_act} (Score: {best_score:.3f})")
-        else:
-            print(f"   Mask {idx}: Rejected (Score {best_score:.3f})")
+        print(f"   Best Action: {best_act.upper()} (Score: {best_score:.3f})")
 
-    # E. VISUALIZZAZIONE FINALE (PRESERVED)
-    print("Visualizing Final Result...")
+        # Threshold check
+        if best_score > 0.05:
+            final_results.append((mask, best_act, best_score))
+        else:
+            final_results.append((mask, "unknown", best_score))
+
+    # E. FINAL VISUALIZATION
+    print("\nVisualizing Final Result...")
     plt.figure(figsize=(12, 12))
     plt.imshow(raw_image)
     ax = plt.gca()
 
+    # Sort results by score just for stable layering
     final_results.sort(key=lambda x: x[2])
     used_legends = set()
 
     for mask, action, score in final_results:
-        color = ACTION_COLORS.get(action, (1.0, 1.0, 1.0))
-        used_legends.add(action)
-        show_mask_custom(mask, ax, color)
+        if action == "unknown":
+            color = (0.5, 0.5, 0.5)  # Gray for unknown
+            label_text = f"Unknown\n{score:.2f}"
+        else:
+            color = ACTION_COLORS.get(action, (1.0, 1.0, 1.0))
+            label_text = f"{action}\n{score:.2f}"
+            used_legends.add(action)
 
+        show_mask_custom(mask, ax, color, alpha=0.5)
+
+        # Place label at centroid
         ys, xs = np.where(mask)
         if len(ys) > 0:
+            cx, cy = np.mean(xs), np.mean(ys)
             ax.text(
-                np.mean(xs),
-                np.mean(ys),
-                f"{action}\n{score:.0%}",
+                cx,
+                cy,
+                label_text,
                 color="white",
-                fontsize=8,
+                fontsize=9,
                 fontweight="bold",
                 ha="center",
                 va="center",
@@ -602,11 +586,11 @@ def main():
         plt.legend(handles=patches, loc="upper right")
 
     plt.axis("off")
-    plt.title("SAM3 + B-Cos (Voc-Optimized + Softmax)")
+    plt.title("SAM3 + B-Cos (Instance-Based Recognition)")
 
-    out_path = os.path.join(OUTPUT_DIR, "final_voc_result.png")
+    out_path = os.path.join(OUTPUT_DIR, "final_voc_result_instance.png")
     plt.savefig(out_path, bbox_inches="tight", pad_inches=0)
-    print(f"📸 Saved to: {out_path}")
+    print(f"📸 Saved final result to: {out_path}")
     plt.show()
 
 

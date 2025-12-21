@@ -15,7 +15,7 @@ if path_to_sam3 not in sys.path:
     sys.path.append(path_to_sam3)
 
 checkpoint_path = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/sam3_model/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt"
-IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006635.jpg"
+IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005438.jpg"
 PROMPTS = ["person running", "person riding a bike"]
 
 try:

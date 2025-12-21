@@ -28,7 +28,7 @@ from bcos_localization import (
 import bcos.data.transforms as custom_transforms
 
 CHECKPOINT_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/sam3_model/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt"
-IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005667.jpg"
+IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_003570.jpg"
 OUTPUT_DIR = "sam_bcos_voc_refined"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -119,13 +119,13 @@ PROMPT_CONFIG = {
             "person holding a smartphone to the ear",
             "person talking on a mobile phone",
             "person using a telephone",
-            # "person holding a phone against face",
+            "person holding a phone against face",
             "person making a phone call",
             # "screen of a mobile phone",
             "person phoning",
         ],
         "negative": [
-            "touching face with hand",
+            # "touching face with hand",
             "scratching head",
             "resting hand on cheek",
             "drinking from a cup",
@@ -271,17 +271,40 @@ PROMPT_CONFIG = {
 # --- 3. FUNZIONI DI EMBEDDING ---
 
 
-def get_action_embedding(clip_model, action, device):
-    prompts = list(PROMPT_CONFIG[action]["positive"])  # COPY
-    prompts += [
-        f"a photo of a person {action}.",
-        f"a clean origami of a person {action}.",
-    ]
+# def get_action_embedding(clip_model, action, device):
+#     prompts = list(PROMPT_CONFIG[action]["positive"])  # COPY
+#     prompts += [
+#         f"a photo of a person {action}.",
+#         f"a clean origami of a person {action}.",
+#     ]
 
+#     weights = []
+#     with torch.no_grad():
+#         for p in prompts:
+#             w = tokenize_text_prompt(clip_model, p).to(device)
+#             weights.append(w)
+#     return torch.mean(torch.stack(weights), dim=0)
+
+
+def get_action_embedding(clip_model, action, device):
+    """Calcola il vettore del target"""
+    prompts = list(PROMPT_CONFIG[action]["positive"])
+    prompts += [
+        f"a clean origami of a person with clothes,people,human {action}.",
+        f"a photo of a person with clothes,people,human {action}.",
+        f"a photo of the {action}.",
+        f"a picture of a person with clothes,people,human {action}.",
+        f"an image of a person with clothes,people,human {action}.",
+        f"an image of the {action}.",
+        f"the {action}.",
+    ]
+    identity_template = ["{}"]
     weights = []
     with torch.no_grad():
         for p in prompts:
-            w = tokenize_text_prompt(clip_model, p).to(device)
+            w = tokenize_text_prompt(clip_model, p, templates=identity_template).to(
+                device
+            )
             weights.append(w)
     return torch.mean(torch.stack(weights), dim=0)
 
@@ -290,7 +313,7 @@ def get_negative_embedding(clip_model, action, device):
     final_negatives = BASE_BACKGROUND.copy()
     specific_negatives = PROMPT_CONFIG[action]["negative"]
     final_negatives.extend(specific_negatives)
-
+    identity_template = ["{}"]
     weights = []
     with torch.no_grad():
         for p in final_negatives:
@@ -298,7 +321,9 @@ def get_negative_embedding(clip_model, action, device):
                 text = p
             else:
                 text = f"a photo of {p}"
-            w = tokenize_text_prompt(clip_model, text).to(device)
+            w = tokenize_text_prompt(clip_model, text, templates=identity_template).to(
+                device
+            )
             weights.append(w)
     return torch.mean(torch.stack(weights), dim=0)
 
@@ -309,6 +334,18 @@ def show_mask_custom(mask, ax, color, alpha=0.55):
     h, w = mask.shape
     mask_image = mask.reshape(h, w, 1) * color_rgba.reshape(1, 1, -1)
     ax.imshow(mask_image)
+
+
+def dilate_person_mask(mask, radius_px=18):
+    """
+    Estende la mask della persona per includere oggetti di interazione
+    (telefono, libro, camera, strumenti).
+    """
+    mask_u8 = mask.astype(np.uint8) * 255
+    k = 2 * radius_px + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    dilated = cv2.dilate(mask_u8, kernel, iterations=1) > 0
+    return dilated
 
 
 # --- 4. PIPELINE ---
@@ -570,6 +607,49 @@ def main():
             if score > best_score:
                 best_score = score
                 best_act = action
+        # print("Voting using Coherent Action Score...")
+        # final_results = []
+
+        # all_maps = np.stack([clean_heatmaps[a] for a in VOC_ACTIONS], axis=0)
+
+        # ALPHA_CTX = 0.6  # peso del contesto (0.4–0.7 consigliato)
+        # CTX_RADIUS = 18  # 18–22 per VOC
+
+        # for idx, mask in enumerate(valid_masks):
+        #     best_act = "unknown"
+        #     best_score = -1e9
+
+        #     # mask estesa: persona + possibile oggetto
+        #     ctx_mask = dilate_person_mask(mask, radius_px=CTX_RADIUS)
+
+        #     for i, action in enumerate(VOC_ACTIONS):
+        #         diff_map = clean_heatmaps[action]
+        #         mean_other = np.mean(np.delete(all_maps, i, axis=0), axis=0)
+
+        #         # score sulla persona pura
+        #         s_person = score_action(
+        #             diff_map,
+        #             mask,
+        #             mean_other,
+        #             lambda_c=0.7,
+        #             beta_l=0.6,
+        #         )
+
+        #         # score sulla persona + contesto
+        #         s_context = score_action(
+        #             diff_map,
+        #             ctx_mask,
+        #             mean_other,
+        #             lambda_c=0.7,
+        #             beta_l=0.6,
+        #         )
+
+        #         # combinazione (non distruttiva)
+        #         final_score = s_person + ALPHA_CTX * s_context
+
+        #         if final_score > best_score:
+        #             best_score = final_score
+        #             best_act = action
 
         if best_score > 0.1:  # 0.
             final_results.append((mask, best_act, best_score))

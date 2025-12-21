@@ -28,27 +28,69 @@ import bcos.data.transforms as custom_transforms
 import scipy.ndimage as ndimage
 
 
+# def load_bcos_model(exp_name=None):
+#     """
+#     Load B-cos CLIP model.
+#     Uses the default experiment path from the bcosification repository.
+#     """
+#     if exp_name is None:
+#         exp_name = "experiments/ImageNet/clip_bcosification/resnet_50_clip_b2_noBias_randomResizedCrop_sigLip_ImageNet_bcosification"
+
+#     # The Experiment class will look for the model checkpoint in:
+#     # bcosification/experiments/ImageNet/clip_bcosification/resnet_50_clip_b2_noBias_randomResizedCrop_sigLip_ImageNet_bcosification/
+#     exp = Experiment(exp_name)
+#     model = exp.load_trained_model()
+
+#     # Don't use attn_unpool for standard operation
+#     model.model.attnpool.attn_unpool = False
+
+#     device = torch.device(
+#         "cuda"
+#         if torch.cuda.is_available()
+#         else "mps" if torch.backends.mps.is_available() else "cpu"
+#     )
+
+#     return model, device
+
+
 def load_bcos_model(exp_name=None):
-    """
-    Load B-cos CLIP model.
-    Uses the default experiment path from the bcosification repository.
-    """
-    if exp_name is None:
-        exp_name = "experiments/ImageNet/clip_bcosification/resnet_50_clip_b2_noBias_randomResizedCrop_sigLip_ImageNet_bcosification"
-
-    # The Experiment class will look for the model checkpoint in:
-    # bcosification/experiments/ImageNet/clip_bcosification/resnet_50_clip_b2_noBias_randomResizedCrop_sigLip_ImageNet_bcosification/
-    exp = Experiment(exp_name)
-    model = exp.load_trained_model()
-
-    # Don't use attn_unpool for standard operation
-    model.model.attnpool.attn_unpool = False
-
-    device = torch.device(
-        "cuda"
-        if torch.cuda.is_available()
-        else "mps" if torch.backends.mps.is_available() else "cpu"
+    # 1. Definiamo i parametri
+    dataset = "ImageNet"
+    network_type = "clip_bcosification"
+    experiment_name = (
+        "resnet_50_clip_b2_noBias_randomResizedCrop_sigLip_ImageNet_bcosification"
     )
+
+    # 2. Definisci dove si trova la cartella "experiments" che hai appena creato/usato
+    # ATTENZIONE: Assicurati che questo path punti alla cartella che CONTIENE "ImageNet"
+    # Se hai messo il file in: /leonardo_work/.../AML/experiments/ImageNet/...
+    # Allora base_dir deve essere: /leonardo_work/.../AML/experiments
+    base_dir = "./experiments"
+
+    print(f"DEBUG: Carico esperimento standard da {base_dir}...")
+
+    # 3. Inizializza l'esperimento
+    # Ora 'Experiment' troverà tutto da solo perché la struttura delle cartelle è corretta
+    exp = Experiment(
+        path_or_dataset=dataset,
+        base_network=network_type,
+        experiment_name=experiment_name,
+        base_directory=base_dir,
+    )
+
+    # 4. Carica il modello
+    # reload="last" cercherà automaticamente 'last.ckpt' nella cartella giusta
+    model = exp.load_trained_model(reload="last", verbose=True)
+
+    # # 5. Configurazione post-caricamento (Standard)
+    # if hasattr(model, "model") and hasattr(model.model, "attnpool"):
+    #     model.model.attnpool.attn_unpool = False
+    # elif hasattr(model, "attnpool"):
+    #     model.attnpool.attn_unpool = False
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    model.eval()
 
     return model, device
 

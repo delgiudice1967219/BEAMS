@@ -7,8 +7,8 @@ from PIL import Image
 import cv2
 import matplotlib.patches as mpatches
 import matplotlib as mpl  # Import necessario per i colori moderni
+from utils_voc_actions import parse_voc_xml, compute_iou, mask_to_bbox
 
-# --- 1. CONFIGURAZIONE ---
 path_to_sam3 = (
     "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/sam3"
 )
@@ -23,9 +23,34 @@ except ImportError as e:
     sys.exit(1)
 
 CHECKPOINT_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/sam3_model/models--facebook--sam3/snapshots/3c879f39826c281e95690f02c7821c4de09afae7/sam3.pt"
-IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006182.jpg"
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005070.jpg"
 
-OUTPUT_DIR = "sam3_global_match_fixed_viz"
+
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005438.jpg"  # flauti
+IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005572.jpg"  # matrimonio
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005706.jpg"  # phoning reading
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_003817.jpg"  # violinista che legge
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006994.jpg"  # scooter e pedoni
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006767.jpg"  # mamma e figlia walking
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006375.jpg"  # cavallo in medio oriente
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005751.jpg"  # calciatrici
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006295.jpg"  # suonatore dentro al muro
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006089.jpg"  # bimba sul cavallo
+
+### GALLERY ###
+
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005220.jpg"  # GALLERY -> walking, bike
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_004775.jpg"  # GALLERY -> photo, instrument
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_003298.jpg"  # GALLERY -> jumping, forse ce esempio migliore
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_004512.jpg"  # GALLERY -> horse, walking
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005256.jpg"  # GALLERY -> reading, photo
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006129.jpg"  # GALLERY -> phoning
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2010_006095.jpg"  # GALLERY -> usingcomputer
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_003422.jpg"  # GALLERY -> running, bike
+# IMG_PATH = "C:/Users/xavie/Desktop/Universitá/2nd year/AML/BCos_object_detection/data/VOCdevkit/VOC2012/JPEGImages/2011_005070.jpg"  # GALLERY -> running, walking
+
+
+OUTPUT_DIR = "sam3_action_detection_viz"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -124,6 +149,46 @@ def main():
     if len(people_masks) == 0:
         print("No people found. Exiting.")
         return
+
+    # --- FILTER MASKS: Match against Ground Truth People ---
+
+    # 1. Deduce XML path
+    xml_path = IMG_PATH.replace("JPEGImages", "Annotations").replace(".jpg", ".xml")
+
+    gt_people = parse_voc_xml(xml_path)
+    print(f"Ground Truth contains {len(gt_people)} people.")
+
+    if len(gt_people) > 0:
+        gt_to_mask = {}
+        used_masks = set()
+        ious = np.zeros((len(gt_people), len(people_masks)))
+
+        # Calculate IoU
+        for i, gt in enumerate(gt_people):
+            for j, mask in enumerate(people_masks):
+                bbox_mask = mask_to_bbox(mask)
+                if bbox_mask:
+                    ious[i, j] = compute_iou(gt["bbox"], bbox_mask)
+
+        # Greedy Matching
+        if ious.size > 0:
+            indices = np.dstack(
+                np.unravel_index(np.argsort(ious.ravel())[::-1], ious.shape)
+            )[0]
+
+            for r, c in indices:
+                if ious[r, c] < 0.1:  # IoU threshold
+                    break
+                if r not in gt_to_mask and c not in used_masks:
+                    gt_to_mask[r] = c
+                    used_masks.add(c)
+
+        # Overwrite people_masks
+        matched_indices = sorted(gt_to_mask.values())
+        people_masks = [people_masks[i] for i in matched_indices]
+        print(f"Filtered down to {len(people_masks)} masks that match GT.")
+    else:
+        print("No GT found (or XML missing). Keeping all masks.")
 
     # ---------------------------------------------------------
     # STAGE 2: GENERATE GLOBAL ACTION MASKS
@@ -242,11 +307,11 @@ def main():
         plt.legend(handles=patches, loc="upper right")
 
     plt.axis("off")
-    plt.title("SAM3 Global Match (Fixed Viz)")
+    plt.title("SAM3 Action Detection")
 
     out_path = os.path.join(OUTPUT_DIR, "sam3_match_fixed_viz.png")
     plt.savefig(out_path, bbox_inches="tight")
-    print(f"📸 Saved to: {out_path}")
+    print(f"Saved to: {out_path}")
     plt.show()
 
 
